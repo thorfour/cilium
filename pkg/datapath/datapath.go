@@ -15,13 +15,18 @@
 package datapath
 
 import (
+	"context"
 	"io"
+
+	"github.com/cilium/cilium/pkg/datapath/loader/metrics"
+	"github.com/sirupsen/logrus"
 )
 
 // Datapath is the interface to abstract all datapath interactions. The
 // abstraction allows to implement the datapath requirements with multiple
 // implementations
 type Datapath interface {
+	ConfigWriter
 	// Node must return the handler for node events
 	Node() NodeHandler
 
@@ -29,6 +34,18 @@ type Datapath interface {
 	// of the local node
 	LocalNodeAddressing() NodeAddressing
 
+	// InstallProxyRules creates the necessary datapath config (e.g., iptables
+	// rules for redirecting host proxy traffic on a specific ProxyPort)
+	InstallProxyRules(proxyPort uint16, ingress bool, name string) error
+
+	// RemoveProxyRules creates the necessary datapath config (e.g., iptables
+	// rules for redirecting host proxy traffic on a specific ProxyPort)
+	RemoveProxyRules(proxyPort uint16, ingress bool, name string) error
+
+	Loader() Loader
+}
+
+type ConfigWriter interface {
 	// WriteNodeConfig writes the implementation-specific configuration of
 	// node-wide options into the specified writer.
 	WriteNodeConfig(io.Writer, *LocalNodeConfiguration) error
@@ -46,12 +63,26 @@ type Datapath interface {
 	// WriteEndpointConfig writes the implementation-specific configuration
 	// of configurable options for the endpoint to the specified writer.
 	WriteEndpointConfig(w io.Writer, cfg EndpointConfiguration) error
+}
 
-	// InstallProxyRules creates the necessary datapath config (e.g., iptables
-	// rules for redirecting host proxy traffic on a specific ProxyPort)
-	InstallProxyRules(proxyPort uint16, ingress bool, name string) error
+// Loader is an interface to abstract out loading of datapath programs.
+type Loader interface {
+	CallsMapPath(id uint16) string
+	CompileAndLoad(ctx context.Context, ep Endpoint, stats *metrics.SpanStat) error
+	CompileOrLoad(ctx context.Context, ep Endpoint, stats *metrics.SpanStat) error
+	ReloadDatapath(ctx context.Context, ep Endpoint, stats *metrics.SpanStat) error
+	EndpointHash(cfg EndpointConfiguration) (string, error)
+	DeleteDatapath(ctx context.Context, ifName, direction string) error
+	Unload(ep Endpoint)
+	Init(d ConfigWriter, nodeCfg *LocalNodeConfiguration)
+}
 
-	// RemoveProxyRules creates the necessary datapath config (e.g., iptables
-	// rules for redirecting host proxy traffic on a specific ProxyPort)
-	RemoveProxyRules(proxyPort uint16, ingress bool, name string) error
+// Endpoint provides access endpoint configuration information that is necessary
+// to compile and load the datapath.
+type Endpoint interface {
+	EndpointConfiguration
+	InterfaceName() string
+	Logger(subsystem string) *logrus.Entry
+	StateDir() string
+	MapPath() string
 }

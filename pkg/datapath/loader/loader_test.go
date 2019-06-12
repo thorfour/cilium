@@ -27,7 +27,8 @@ import (
 	"time"
 
 	"github.com/cilium/cilium/pkg/bpf"
-	"github.com/cilium/cilium/pkg/datapath/linux"
+	"github.com/cilium/cilium/pkg/datapath/linux/config"
+	"github.com/cilium/cilium/pkg/datapath/loader/metrics"
 	"github.com/cilium/cilium/pkg/elf"
 	bpfconfig "github.com/cilium/cilium/pkg/maps/configmap"
 	"github.com/cilium/cilium/pkg/maps/policymap"
@@ -165,9 +166,11 @@ func getDirs(tmpDir string) *directoryInfo {
 func (s *LoaderTestSuite) TestCompileAndLoad(c *C) {
 	ctx, cancel := context.WithTimeout(context.Background(), contextTimeout)
 	defer cancel()
-	stats := &SpanStat{}
+	stats := &metrics.SpanStat{}
 
-	err := compileAndLoad(ctx, &ep, dirInfo, stats)
+	l := &Loader{}
+
+	err := l.compileAndLoad(ctx, &ep, dirInfo, stats)
 	c.Assert(err, IsNil)
 }
 
@@ -204,11 +207,13 @@ func (s *LoaderTestSuite) TestCompileFailure(c *C) {
 		}
 	}()
 
+	l := &Loader{}
+
 	timeout := time.Now().Add(contextTimeout)
 	var err error
-	stats := &SpanStat{}
+	stats := &metrics.SpanStat{}
 	for err == nil && time.Now().Before(timeout) {
-		err = compileAndLoad(ctx, &ep, dirInfo, stats)
+		err = l.compileAndLoad(ctx, &ep, dirInfo, stats)
 	}
 	c.Assert(err, NotNil)
 }
@@ -229,13 +234,15 @@ func BenchmarkCompileOnly(b *testing.B) {
 
 // BenchmarkCompileAndLoad benchmarks the entire compilation + loading process.
 func BenchmarkCompileAndLoad(b *testing.B) {
-	stats := &SpanStat{}
+	stats := &metrics.SpanStat{}
 	ctx, cancel := context.WithTimeout(context.Background(), benchTimeout)
 	defer cancel()
 
+	l := &Loader{}
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := compileAndLoad(ctx, &ep, dirInfo, stats); err != nil {
+		if err := l.compileAndLoad(ctx, &ep, dirInfo, stats); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -303,15 +310,18 @@ func BenchmarkCompileOrLoad(b *testing.B) {
 	}
 	defer os.RemoveAll(epDir)
 
-	templateCache = newObjectCache(linux.NewDatapath(linux.DatapathConfiguration{}), nil, tmpDir)
-	if err := CompileOrLoad(ctx, &ep, nil); err != nil {
+	l := &Loader{}
+
+	cfgWriter := &config.HeaderfileConfigurationWriter{}
+	l.templateCache = newObjectCache(cfgWriter, nil, tmpDir)
+	if err := l.CompileOrLoad(ctx, &ep, nil); err != nil {
 		log.Warningf("Failure in %s: %s", tmpDir, err)
 		time.Sleep(1 * time.Minute)
 		b.Fatal(err)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := CompileOrLoad(ctx, &ep, nil); err != nil {
+		if err := l.CompileOrLoad(ctx, &ep, nil); err != nil {
 			b.Fatal(err)
 		}
 	}

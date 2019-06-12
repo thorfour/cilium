@@ -18,7 +18,7 @@ package loader
 
 import (
 	"github.com/cilium/cilium/pkg/datapath"
-	"github.com/cilium/cilium/pkg/datapath/linux"
+	"github.com/cilium/cilium/pkg/datapath/linux/config"
 	"github.com/cilium/cilium/pkg/testutils"
 
 	. "gopkg.in/check.v1"
@@ -33,7 +33,7 @@ var (
 // TesthashDatapath is done in this package just for easy access to dummy
 // configuration objects.
 func (s *LoaderTestSuite) TesthashDatapath(c *C) {
-	dp := linux.NewDatapath(linux.DatapathConfiguration{})
+	dp := &config.HeaderfileConfigurationWriter{}
 	h := newDatapathHash()
 	baseHash := h.String()
 

@@ -19,13 +19,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/cilium/cilium/common"
 	"github.com/cilium/cilium/pkg/controller"
 	"github.com/cilium/cilium/pkg/datapath"
+	"github.com/cilium/cilium/pkg/datapath/loader/metrics"
 	"github.com/cilium/cilium/pkg/defaults"
-	"github.com/cilium/cilium/pkg/elf"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
@@ -35,50 +34,27 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var (
-	once sync.Once
+const templateWatcherQueueSize = 10
 
-	// templateCache is the cache of pre-compiled datapaths.
-	templateCache            *objectCache
-	templateWatcherQueueSize = 10
-
-	ignoredELFPrefixes = []string{
-		"2/",                   // Calls within the endpoint
-		"HOST_IP",              // Global
-		"IPV6_NODEPORT",        // Global
-		"ROUTER_IP",            // Global
-		"SNAT_IPV6_EXTERNAL",   // Global
-		"cilium_ct",            // All CT maps, including local
-		"cilium_encrypt_state", // Global
-		"cilium_events",        // Global
-		"cilium_ipcache",       // Global
-		"cilium_lb",            // Global
-		"cilium_lxc",           // Global
-		"cilium_metrics",       // Global
-		"cilium_policy",        // Global
-		"cilium_proxy",         // Global
-		"cilium_snat",          // All SNAT maps
-		"cilium_tunnel",        // Global
-		"from-container",       // Prog name
-		"to-container",         // Prog name
-	}
-)
-
-// Init initializes the datapath cache with base program hashes derived from
-// the LocalNodeConfiguration.
-func Init(dp datapath.Datapath, nodeCfg *datapath.LocalNodeConfiguration) {
-	once.Do(func() {
-		templateCache = NewObjectCache(dp, nodeCfg)
-		ignorePrefixes := ignoredELFPrefixes
-		if !option.Config.EnableIPv4 {
-			ignorePrefixes = append(ignorePrefixes, "LXC_IPV4")
-		}
-		if !option.Config.EnableIPv6 {
-			ignorePrefixes = append(ignorePrefixes, "LXC_IP_")
-		}
-		elf.IgnoreSymbolPrefixes(ignorePrefixes)
-	})
-	templateCache.Update(nodeCfg)
+var ignoredELFPrefixes = []string{
+	"2/",                   // Calls within the endpoint
+	"HOST_IP",              // Global
+	"IPV6_NODEPORT",        // Global
+	"ROUTER_IP",            // Global
+	"SNAT_IPV6_EXTERNAL",   // Global
+	"cilium_ct",            // All CT maps, including local
+	"cilium_encrypt_state", // Global
+	"cilium_events",        // Global
+	"cilium_ipcache",       // Global
+	"cilium_lb",            // Global
+	"cilium_lxc",           // Global
+	"cilium_metrics",       // Global
+	"cilium_policy",        // Global
+	"cilium_proxy",         // Global
+	"cilium_snat",          // All SNAT maps
+	"cilium_tunnel",        // Global
+	"from-container",       // Prog name
+	"to-container",         // Prog name
 }
 
 // RestoreTemplates populates the object cache from templates on the filesystem
@@ -102,7 +78,8 @@ func RestoreTemplates(stateDir string) error {
 // filesystem where its corresponding BPF object file exists.
 type objectCache struct {
 	lock.Mutex
-	datapath.Datapath
+
+	ConfigWriter datapath.ConfigWriter
 
 	workingDirectory string
 	baseHash         *datapathHash
@@ -119,9 +96,9 @@ type objectCache struct {
 	compileQueue map[string]*serializer.FunctionQueue
 }
 
-func newObjectCache(dp datapath.Datapath, nodeCfg *datapath.LocalNodeConfiguration, workingDir string) *objectCache {
+func newObjectCache(dp datapath.ConfigWriter, nodeCfg *datapath.LocalNodeConfiguration, workingDir string) *objectCache {
 	oc := &objectCache{
-		Datapath:            dp,
+		ConfigWriter:        dp,
 		workingDirectory:    workingDir,
 		newTemplates:        make(chan string, templateWatcherQueueSize),
 		templateWatcherDone: make(chan struct{}),
@@ -140,14 +117,14 @@ func newObjectCache(dp datapath.Datapath, nodeCfg *datapath.LocalNodeConfigurati
 
 // NewObjectCache creates a new cache for datapath objects, basing the hash
 // upon the configuration of the datapath and the specified node configuration.
-func NewObjectCache(dp datapath.Datapath, nodeCfg *datapath.LocalNodeConfiguration) *objectCache {
+func NewObjectCache(dp datapath.ConfigWriter, nodeCfg *datapath.LocalNodeConfiguration) *objectCache {
 	return newObjectCache(dp, nodeCfg, option.Config.StateDir)
 }
 
 // Update may be called to update the base hash for configuration of datapath
 // configuration that applies across the node.
 func (o *objectCache) Update(nodeCfg *datapath.LocalNodeConfiguration) {
-	newHash := hashDatapath(o.Datapath, nodeCfg, nil, nil)
+	newHash := hashDatapath(o.ConfigWriter, nodeCfg, nil, nil)
 
 	o.Lock()
 	defer o.Unlock()
@@ -226,7 +203,7 @@ func (o *objectCache) build(ctx context.Context, cfg *templateCfg, hash string) 
 		}
 	}
 
-	if err = o.Datapath.WriteEndpointConfig(f, cfg); err != nil {
+	if err = o.ConfigWriter.WriteEndpointConfig(f, cfg); err != nil {
 		return &os.PathError{
 			Op:   "failed to write template header",
 			Path: headerPath,
@@ -234,9 +211,9 @@ func (o *objectCache) build(ctx context.Context, cfg *templateCfg, hash string) 
 		}
 	}
 
-	cfg.stats.bpfCompilation.Start()
+	cfg.stats.BpfCompilation.Start()
 	err = compileTemplate(ctx, templatePath)
-	cfg.stats.bpfCompilation.End(err == nil)
+	cfg.stats.BpfCompilation.End(err == nil)
 	if err != nil {
 		return &os.PathError{
 			Op:   "failed to compile template program",
@@ -247,7 +224,7 @@ func (o *objectCache) build(ctx context.Context, cfg *templateCfg, hash string) 
 
 	log.WithFields(logrus.Fields{
 		logfields.Path:               objectPath,
-		logfields.BPFCompilationTime: cfg.stats.bpfCompilation.Total(),
+		logfields.BPFCompilationTime: cfg.stats.BpfCompilation.Total(),
 	}).Info("Compiled new BPF template")
 
 	o.insert(hash, objectPath)
@@ -262,19 +239,19 @@ func (o *objectCache) build(ctx context.Context, cfg *templateCfg, hash string) 
 //
 // Returns the path to the compiled template datapath object and whether the
 // object was compiled, or an error.
-func (o *objectCache) fetchOrCompile(ctx context.Context, cfg datapath.EndpointConfiguration, stats *SpanStat) (path string, compiled bool, err error) {
+func (o *objectCache) fetchOrCompile(ctx context.Context, cfg datapath.EndpointConfiguration, stats *metrics.SpanStat) (path string, compiled bool, err error) {
 	var hash string
-	hash, err = o.baseHash.sumEndpoint(o, cfg, false)
+	hash, err = o.baseHash.sumEndpoint(o.ConfigWriter, cfg, false)
 	if err != nil {
 		return "", false, err
 	}
 
 	// Capture the time spent waiting for the template to compile.
 	if stats != nil {
-		stats.bpfWaitForELF.Start()
+		stats.BpfWaitForELF.Start()
 		defer func() {
 			// Wrap to ensure that "err" is compared upon return.
-			stats.bpfWaitForELF.End(err == nil)
+			stats.BpfWaitForELF.End(err == nil)
 		}()
 	}
 
@@ -356,6 +333,6 @@ func (o *objectCache) watchTemplatesDirectory(ctx context.Context) error {
 
 // EndpointHash hashes the specified endpoint configuration with the current
 // datapath hash cache and returns the hash as string.
-func EndpointHash(cfg datapath.EndpointConfiguration) (string, error) {
-	return templateCache.baseHash.sumEndpoint(templateCache, cfg, true)
+func (l *Loader) EndpointHash(cfg datapath.EndpointConfiguration) (string, error) {
+	return l.templateCache.baseHash.sumEndpoint(l.templateCache.ConfigWriter, cfg, true)
 }

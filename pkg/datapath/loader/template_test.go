@@ -20,7 +20,7 @@ import (
 	"bytes"
 
 	"github.com/cilium/cilium/pkg/checker"
-	"github.com/cilium/cilium/pkg/datapath/linux"
+	"github.com/cilium/cilium/pkg/datapath/linux/config"
 	"github.com/cilium/cilium/pkg/testutils"
 
 	. "gopkg.in/check.v1"
@@ -34,7 +34,7 @@ func (s *LoaderTestSuite) TestWrap(c *C) {
 
 	realEP := testutils.NewTestEndpoint()
 	template := wrap(&realEP, nil)
-	dp := linux.NewDatapath(linux.DatapathConfiguration{})
+	dp := &config.HeaderfileConfigurationWriter{}
 
 	// Write the configuration that should be the same, and verify it is.
 	err := dp.WriteTemplateConfig(&realEPBuffer, &realEP)

@@ -12,18 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build !privileged_tests
+// +build privileged_tests
 
-package linux
+package config
 
 import (
 	. "gopkg.in/check.v1"
-)
-
-type DatapathSuite struct{}
-
-var (
-	_ = Suite(&DatapathSuite{})
 )
 
 type formatTestCase struct {
@@ -31,7 +25,7 @@ type formatTestCase struct {
 	output string
 }
 
-func (s *DatapathSuite) TestGoArray2C(c *C) {
+func (s *ConfigSuite) TestGoArray2C(c *C) {
 	tests := []formatTestCase{
 		{
 			input:  []byte{0, 0x01, 0x02, 0x03},
@@ -60,7 +54,7 @@ func (s *DatapathSuite) TestGoArray2C(c *C) {
 	}
 }
 
-func (s *DatapathSuite) TestdefineIPv6(c *C) {
+func (s *ConfigSuite) TestdefineIPv6(c *C) {
 	tests := []formatTestCase{
 		{
 			input:  nil,
@@ -85,7 +79,7 @@ func (s *DatapathSuite) TestdefineIPv6(c *C) {
 	}
 }
 
-func (s *DatapathSuite) TestdefineMAC(c *C) {
+func (s *ConfigSuite) TestdefineMAC(c *C) {
 	tests := []formatTestCase{
 		{
 			input:  nil,

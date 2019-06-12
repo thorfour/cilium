@@ -15,8 +15,12 @@
 package linux
 
 import (
+	"io"
+
 	"github.com/cilium/cilium/pkg/datapath"
 	"github.com/cilium/cilium/pkg/datapath/iptables"
+	fileConfigurer "github.com/cilium/cilium/pkg/datapath/linux/config"
+	"github.com/cilium/cilium/pkg/datapath/loader"
 	"github.com/cilium/cilium/pkg/endpoint/connector"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 )
@@ -34,6 +38,8 @@ type linuxDatapath struct {
 	node           datapath.NodeHandler
 	nodeAddressing datapath.NodeAddressing
 	config         DatapathConfiguration
+	loader         *loader.Loader
+	configWriter   *fileConfigurer.HeaderfileConfigurationWriter
 }
 
 // NewDatapath creates a new Linux datapath
@@ -50,6 +56,9 @@ func NewDatapath(config DatapathConfiguration) datapath.Datapath {
 			log.WithField(logfields.Interface, config.EncryptInterface).Warn("Rpfilter could not be disabled, node to node encryption may fail")
 		}
 	}
+
+	dp.loader = &loader.Loader{}
+	dp.configWriter = &fileConfigurer.HeaderfileConfigurationWriter{}
 
 	return dp
 }
@@ -71,4 +80,24 @@ func (l *linuxDatapath) InstallProxyRules(proxyPort uint16, ingress bool, name s
 
 func (l *linuxDatapath) RemoveProxyRules(proxyPort uint16, ingress bool, name string) error {
 	return iptables.RemoveProxyRules(proxyPort, ingress, name)
+}
+
+func (l *linuxDatapath) Loader() datapath.Loader {
+	return l.loader
+}
+
+func (l *linuxDatapath) WriteTemplateConfig(w io.Writer, e datapath.EndpointConfiguration) error {
+	return l.configWriter.WriteTemplateConfig(w, e)
+}
+
+func (l *linuxDatapath) WriteEndpointConfig(w io.Writer, e datapath.EndpointConfiguration) error {
+	return l.configWriter.WriteEndpointConfig(w, e)
+}
+
+func (l *linuxDatapath) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeConfiguration) error {
+	return l.configWriter.WriteNodeConfig(w, cfg)
+}
+
+func (l *linuxDatapath) WriteNetdevConfig(w io.Writer, cfg datapath.DeviceConfiguration) error {
+	return l.configWriter.WriteNetdevConfig(w, cfg)
 }
