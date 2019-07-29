@@ -76,7 +76,7 @@ tests-privileged:
 	# cilium-map-migrate is a dependency of some unit tests.
 	$(MAKE) -C bpf cilium-map-migrate
 	$(QUIET)$(foreach pkg,$(PRIV_TEST_PKGS),\
-		$(GO) test $(TEST_LDFLAGS) github.com/cilium/cilium/$(pkg) $(GOTEST_PRIV_OPTS) || exit 1;)
+		$(GO) test $(GOFLAGS) $(TEST_LDFLAGS) github.com/cilium/cilium/$(pkg) $(GOTEST_PRIV_OPTS) || exit 1;)
 
 start-kvstores:
 	@echo Starting key-value store containers...
@@ -127,7 +127,7 @@ unit-tests: start-kvstores
 	$(QUIET) echo "mode: count" > coverage-all-tmp.out
 	$(QUIET) echo "mode: count" > coverage.out
 	$(QUIET)$(foreach pkg,$(patsubst %,github.com/cilium/cilium/%,$(TESTPKGS)),\
-		$(GO) test $(TEST_UNITTEST_LDFLAGS) $(pkg) $(GOTEST_BASE) $(GOTEST_COVER_OPTS) || exit 1; \
+		$(GO) test $(GOFLAGS) $(TEST_UNITTEST_LDFLAGS) $(pkg) $(GOTEST_BASE) $(GOTEST_COVER_OPTS) || exit 1; \
 		tail -n +2 coverage.out >> coverage-all-tmp.out;)
 	$(MAKE) generate-cov
 	@rmdir ./daemon/1 ./daemon/1_backup 2> /dev/null || true
@@ -135,14 +135,14 @@ unit-tests: start-kvstores
 
 bench: start-kvstores
 	$(QUIET)$(foreach pkg,$(patsubst %,github.com/cilium/cilium/%,$(TESTPKGS)),\
-		$(GO) test $(TEST_UNITTEST_LDFLAGS) $(GOTEST_BASE) $(BENCHFLAGS) \
+		$(GO) test $(GOFLAGS) $(TEST_UNITTEST_LDFLAGS) $(GOTEST_BASE) $(BENCHFLAGS) \
 			$(pkg) \
 		|| exit 1;)
 	$(MAKE) stop-kvstores
 
 bench-privileged:
 	$(QUIET)$(foreach pkg,$(patsubst %,github.com/cilium/cilium/%,$(TESTPKGS)),\
-		$(GO) test $(TEST_UNITTEST_LDFLAGS) $(GOTEST_BASE) $(BENCHFLAGS) \
+		$(GO) test $(GOFLAGS) $(TEST_UNITTEST_LDFLAGS) $(GOTEST_BASE) $(BENCHFLAGS) \
 			-tags=privileged_tests $(pkg) \
 		|| exit 1;)
 
@@ -236,122 +236,102 @@ generate-health-api: api/v1/health/openapi.yaml
 		-t api/v1 -t api/v1/health/ -f api/v1/health/openapi.yaml
 
 generate-k8s-api:
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh all \
+	./tools/generate-k8s-code.sh all \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg/k8s/apis \
 	    "cilium.io:v2" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "policy:api" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium \
 	    "pkg:node" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium \
 	    "pkg:service" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/api \
 	    "v1:models" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "k8s:types" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:policymap" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:ipcache" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:lxcmap" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:tunnel" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:encrypt" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:metricsmap" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:nat" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:configmap" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:lbmap" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:eppolicymap" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:sockmap" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium/pkg \
 	    "maps:ctmap" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium \
 	    "pkg:tuple" \
 	    --go-header-file "$(PWD)/hack/custom-boilerplate.go.txt"
-	cd "./vendor/k8s.io/code-generator" && \
-	./generate-groups.sh deepcopy \
+	./tools/generate-k8s-code.sh deepcopy \
 	    github.com/cilium/cilium/pkg/k8s/client \
 	    github.com/cilium/cilium \
 	    "pkg:bpf" \
