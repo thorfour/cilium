@@ -67,6 +67,9 @@ type EventQueue struct {
 	name string
 
 	eventsMu lock.RWMutex
+
+	// inflightEventMu is added to while an Event is being handled.
+	inflightEventMu lock.Mutex
 }
 
 // NewEventQueue returns an EventQueue with a capacity for only one event at
@@ -235,6 +238,7 @@ func (q *EventQueue) Run() {
 				close(ev.eventResults)
 				ev.printStats(q)
 			default:
+				q.inflightEventMu.Lock()
 				ev.stats.waitConsumeOffQueue.End(true)
 				ev.stats.durationStat.Start()
 				ev.Metadata.Handle(ev.eventResults)
@@ -244,6 +248,7 @@ func (q *EventQueue) Run() {
 				// already been processed.
 				ev.printStats(q)
 				close(ev.eventResults)
+				q.inflightEventMu.Unlock()
 			}
 		}
 	})
@@ -286,6 +291,12 @@ func (q *EventQueue) WaitToBeDrained() {
 		return
 	}
 	<-q.close
+
+	// In-flight events may still be running. Wait for them to be completed for
+	// the queue to be fully drained. Immediately unlock since we are simply
+	// blocking until in-flight events are completed.
+	q.inflightEventMu.Lock()
+	q.inflightEventMu.Unlock()
 }
 
 // EventHandler is an interface for allowing an EventQueue to handle events
