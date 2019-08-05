@@ -737,14 +737,14 @@ func NewDaemon(dp datapath.Datapath) (*Daemon, *endpointRestoreState, error) {
 	epMgr := endpointmanager.NewEndpointManager(&endpointsynchronizer.EndpointSynchronizer{})
 	epMgr.InitMetrics()
 
-	// Cleanup flannel on exit
-	cleanupFuncs.Add(func() {
-		if option.Config.FlannelUninstallOnExit {
+	// Cleanup on exit if running in tandem with Flannel.
+	if option.Config.FlannelUninstallOnExit {
+		cleanupFuncs.Add(func() {
 			for _, ep := range epMgr.GetEndpoints() {
 				ep.DeleteBPFProgramLocked()
 			}
-		}
-	})
+		})
+	}
 
 	d := Daemon{
 		loadBalancer:      loadbalancer.NewLoadBalancer(),
