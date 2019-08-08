@@ -259,3 +259,5 @@ global:
   #
   # WARNING: Use with care!
   cleanBpfState: false
+
+  nonLocalNodeIdentity: true
