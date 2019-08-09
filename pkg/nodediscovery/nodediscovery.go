@@ -178,9 +178,9 @@ func (n *NodeDiscovery) StartDiscovery(nodeName string, conf Configuration) {
 	}()
 
 	if k8s.IsEnabled() {
-		// Creation of the CiliumNode can be done in the background,
-		// nothing depends on the completion of this.
-		go n.createCiliumNodeResource(conf)
+		// Creation or update of the CiliumNode can be done in the
+		// background, nothing depends on the completion of this.
+		go n.UpdateCiliumNodeResource(conf)
 	}
 
 	if option.Config.KVStore != "" {
@@ -205,7 +205,9 @@ func (n *NodeDiscovery) Close() {
 	n.Manager.Close()
 }
 
-func (n *NodeDiscovery) createCiliumNodeResource(conf Configuration) {
+// UpdateCiliumNodeResource updates the CiliumNode resource representing the
+// local node
+func (n *NodeDiscovery) UpdateCiliumNodeResource(conf Configuration) {
 	if !option.Config.AutoCreateCiliumNodeResource {
 		return
 	}
@@ -226,7 +228,7 @@ func (n *NodeDiscovery) createCiliumNodeResource(conf Configuration) {
 	// Tie the CiliumNode custom resource lifecycle to the lifecycle of the
 	// Kubernetes node
 	if k8sNode, err := k8s.GetNode(k8s.Client(), node.GetName()); err != nil {
-		log.Warning("Kubernetes node resource representing own node is not available, cannot set OwnerReference")
+		log.WithError(err).Warning("Kubernetes node resource representing own node is not available, cannot set OwnerReference")
 	} else {
 		nodeResource.ObjectMeta.OwnerReferences = []metav1.OwnerReference{{
 			APIVersion: "v1",
@@ -316,9 +318,10 @@ func (n *NodeDiscovery) createCiliumNodeResource(conf Configuration) {
 			log.WithError(err).Fatal("Unable to update CiliumNode resource")
 		}
 	} else {
-		_, err = ciliumClient.CiliumV2().CiliumNodes().Create(nodeResource)
-		if err != nil {
+		if _, err = ciliumClient.CiliumV2().CiliumNodes().Create(nodeResource); err != nil {
 			log.WithError(err).Fatal("Unable to create CiliumNode resource")
+		} else {
+			log.Info("Successfully created CiliumNode resource")
 		}
 	}
 }

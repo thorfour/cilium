@@ -211,6 +211,9 @@ const (
 	NACKreceived      = "NACK received for version" // from https://github.com/cilium/cilium/issues/4003
 	RunInitFailed     = "JoinEP: "                  // from https://github.com/cilium/cilium/pull/5052
 	sizeMismatch      = "size mismatch for BPF map" // from https://github.com/cilium/cilium/issues/7851
+
+	// HelmTemplate is the location of the Helm templates to install Cilium
+	HelmTemplate = "go/src/github.com/cilium/cilium/install/kubernetes/cilium"
 )
 
 // Re-definitions of stable constants in the API. The re-definition is on
@@ -236,14 +239,12 @@ var (
 // CiliumDefaultDSPatch is the default Cilium DaemonSet patch to be used in all tests.
 const CiliumDefaultDSPatch = "cilium-ds-patch.yaml"
 
-// CiliumDefaultPreFlightPatch is the default Cilium Pre-flight DaemonSet patch to be used in all tests.
-const CiliumDefaultPreFlightPatch = "cilium-pre-flight-patch.yaml"
-
-// CiliumDefaultPreFlight is the default Cilium Pre-flight DaemonSet descriptor to be used in all tests.
-const CiliumDefaultPreFlight = "cilium-pre-flight.yaml"
-
 // CiliumConfigMapPatch is the default Cilium ConfigMap patch to be used in all tests.
 const CiliumConfigMapPatch = "cilium-cm-patch.yaml"
+
+// CiliumConfigMapPatchKvstoreAllocator is equivalent to CiliumConfigMapPatch
+// except it uses the kvstore-based allocator instead of the CRD-based allocator.
+const CiliumConfigMapPatchKvstoreAllocator = "cilium-cm-kvstore-allocator-patch.yaml"
 
 // badLogMessages is a map which key is a part of a log message which indicates
 // a failure if the message does not contain any part from value list.
@@ -271,14 +272,21 @@ var ciliumCLICommands = map[string]string{
 // ciliumKubCLICommands these commands are the same as `ciliumCLICommands` but
 // it'll run inside a container and it does not have sudo support
 var ciliumKubCLICommands = map[string]string{
-	"cilium endpoint list -o json":          "endpoint_list.txt",
-	"cilium service list -o json":           "service_list.txt",
-	"cilium config":                         "config.txt",
-	"cilium bpf lb list":                    "bpf_lb_list.txt",
-	"cilium bpf ct list global":             "bpf_ct_list.txt",
-	"cilium bpf tunnel list":                "bpf_tunnel_list.txt",
-	"cilium policy get":                     "policy_get.txt",
-	"cilium status --all-controllers":       "status.txt",
+	"cilium endpoint list -o json":    "endpoint_list.txt",
+	"cilium service list -o json":     "service_list.txt",
+	"cilium config":                   "config.txt",
+	"cilium bpf lb list":              "bpf_lb_list.txt",
+	"cilium bpf ct list global":       "bpf_ct_list.txt",
+	"cilium bpf tunnel list":          "bpf_tunnel_list.txt",
+	"cilium policy get":               "policy_get.txt",
+	"cilium status --all-controllers": "status.txt",
+}
+
+// ciliumKubCLICommandsKVStore contains commands related to querying the kvstore.
+// It is separate from ciliumKubCLICommands because it has a higher likelihood
+// of timing out in our CI, so we want to run it separately. Otherwise, we might
+// lose out on getting other critical debugging output when a test fails.
+var ciliumKubCLICommandsKVStore = map[string]string{
 	"cilium kvstore get cilium --recursive": "kvstore_get.txt",
 }
 

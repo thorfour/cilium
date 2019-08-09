@@ -48,7 +48,7 @@ var _ = Describe("NightlyEpsMeasurement", func() {
 
 	BeforeAll(func() {
 		kubectl = helpers.CreateKubectl(helpers.K8s1VMName(), logger)
-		ProvisionInfraPods(kubectl)
+		DeployCiliumAndDNS(kubectl)
 	})
 	deleteAll := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), endpointsTimeout)
@@ -271,11 +271,11 @@ var _ = Describe("NightlyEpsMeasurement", func() {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			serverctx := kubectl.ExecPodCmdContext(ctx, helpers.DefaultNamespace, server, ncServer)
+			serverctx := kubectl.ExecPodCmdBackground(ctx, helpers.DefaultNamespace, server, ncServer)
 			err = serverctx.WaitUntilMatch(listeningString)
 			Expect(err).To(BeNil(), "netcat server did not start correctly")
 
-			_ = kubectl.ExecPodCmdContext(ctx, helpers.DefaultNamespace, client, ncClient)
+			_ = kubectl.ExecPodCmdBackground(ctx, helpers.DefaultNamespace, client, ncClient)
 
 			testNcConnectivity := func(sleep time.Duration) {
 				helpers.Sleep(sleep)
@@ -300,7 +300,6 @@ var _ = Describe("NightlyEpsMeasurement", func() {
 			kubectl.ValidateNoErrorsInLogs(CurrentGinkgoTestDescription().Duration)
 			manifest := helpers.ManifestGet(netcatDsManifest)
 			kubectl.Apply(manifest).ExpectSuccess("Cannot apply netcat ds")
-			ExpectDaemonSetReady(kubectl, helpers.DefaultNamespace, "netcatds", helpers.HelperTimeout)
 			defer kubectl.Delete(manifest)
 			testConnectivity()
 		})
@@ -308,7 +307,6 @@ var _ = Describe("NightlyEpsMeasurement", func() {
 		It("Test TCP Keepalive without L7 Policy", func() {
 			manifest := helpers.ManifestGet(netcatDsManifest)
 			kubectl.Apply(manifest).ExpectSuccess("Cannot apply netcat ds")
-			ExpectDaemonSetReady(kubectl, helpers.DefaultNamespace, "netcatds", helpers.HelperTimeout)
 			defer kubectl.Delete(manifest)
 			kubectl.Exec(fmt.Sprintf(
 				"%s delete --all cnp -n %s", helpers.KubectlCmd, helpers.DefaultNamespace))
@@ -367,7 +365,7 @@ var _ = Describe("NightlyExamples", func() {
 			// Delete etcd operator because sometimes when install from
 			// clean-state the quorum is lost.
 			// ETCD operator maybe is not installed at all, so no assert here.
-			_ = kubectl.DeleteETCDOperator()
+			kubectl.DeleteETCDOperator()
 			ExpectAllPodsTerminated(kubectl)
 
 		})
@@ -403,7 +401,7 @@ var _ = Describe("NightlyExamples", func() {
 		)
 
 		BeforeAll(func() {
-			ProvisionInfraPods(kubectl)
+			DeployCiliumAndDNS(kubectl)
 		})
 
 		AfterAll(func() {

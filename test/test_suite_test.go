@@ -151,6 +151,14 @@ func reportCreateVMFailure(vm string, err error) {
 }
 
 var _ = BeforeAll(func() {
+	go func() {
+		defer GinkgoRecover()
+		time.Sleep(config.CiliumTestConfig.Timeout)
+		msg := fmt.Sprintf("Test suite timed out after %s", config.CiliumTestConfig.Timeout)
+		By(msg)
+		Fail(msg)
+	}()
+
 	var err error
 
 	logger := log.WithFields(logrus.Fields{"testName": "BeforeAll"})
@@ -214,6 +222,18 @@ var _ = BeforeAll(func() {
 		// Start k8s2
 		// Wait until compilation finished, and pull cilium image on k8s2
 
+		if config.CiliumTestConfig.CiliumImage != "" {
+			os.Setenv("CILIUM_IMAGE", config.CiliumTestConfig.CiliumImage)
+		}
+
+		if config.CiliumTestConfig.CiliumOperatorImage != "" {
+			os.Setenv("CILIUM_OPERATOR_IMAGE", config.CiliumTestConfig.CiliumOperatorImage)
+		}
+
+		if config.CiliumTestConfig.ProvisionK8s == false {
+			os.Setenv("SKIP_K8S_PROVISION", "true")
+		}
+
 		// Name for K8s VMs depends on K8s version that is running.
 
 		// Boot / provision VMs if specified by configuration.
@@ -247,9 +267,6 @@ var _ = BeforeAll(func() {
 		kubectl := helpers.CreateKubectl(helpers.K8s1VMName(), logger)
 
 		kubectl.Apply(helpers.GetFilePath("../examples/kubernetes/addons/prometheus/prometheus.yaml"))
-
-		// deploy Cilium etcd operator
-		kubectl.DeployETCDOperator()
 
 		go kubectl.PprofReport()
 	}

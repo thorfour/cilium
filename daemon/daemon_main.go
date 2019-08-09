@@ -402,7 +402,7 @@ func init() {
 	flags.Duration(option.ConntrackGCInterval, time.Duration(0), "Overwrite the connection-tracking garbage collection interval")
 	option.BindEnv(option.ConntrackGCInterval)
 
-	flags.StringSlice(option.ContainerRuntime, []string{"auto"}, `Sets the container runtime(s) used by Cilium { containerd | crio | docker | none | auto } ( "auto" uses the container runtime found in the order: "docker", "containerd", "crio" )`)
+	flags.StringSlice(option.ContainerRuntime, option.ContainerRuntimeAuto, `Sets the container runtime(s) used by Cilium { containerd | crio | docker | none | auto } ( "auto" uses the container runtime found in the order: "docker", "containerd", "crio" )`)
 	option.BindEnv(option.ContainerRuntime)
 
 	flags.Var(option.NewNamedMapOptions(option.ContainerRuntimeEndpoint, &option.Config.ContainerRuntimeEndpoint, nil),
@@ -498,7 +498,8 @@ func init() {
 	flags.Bool(option.EnableIPSecName, defaults.EnableIPSec, "Enable IPSec support")
 	option.BindEnv(option.EnableIPSecName)
 
-	flags.StringVar(&option.Config.IPSecKeyFile, option.IPSecKeyFileName, "", "Path to IPSec key file")
+	flags.String(option.IPSecKeyFileName, "", "Path to IPSec key file")
+	option.BindEnv(option.IPSecKeyFileName)
 
 	flags.Bool(option.ForceLocalPolicyEvalAtSource, defaults.ForceLocalPolicyEvalAtSource, "Force policy evaluation of all local communication at the source endpoint")
 	option.BindEnv(option.ForceLocalPolicyEvalAtSource)
@@ -580,6 +581,10 @@ func init() {
 	flags.Bool(option.K8sRequireIPv6PodCIDRName, false, "Require IPv6 PodCIDR to be specified in node resource")
 	option.BindEnv(option.K8sRequireIPv6PodCIDRName)
 
+	flags.Uint(option.K8sServiceCacheSize, defaults.K8sServiceCacheSize, "Cilium service cache size for kubernetes")
+	option.BindEnv(option.K8sServiceCacheSize)
+	flags.MarkHidden(option.K8sServiceCacheSize)
+
 	flags.Bool(option.K8sForceJSONPatch, false, "When set uses JSON Patch to update CNP and CEP status in kube-apiserver")
 	option.BindEnv(option.K8sForceJSONPatch)
 	flags.MarkHidden(option.K8sForceJSONPatch)
@@ -622,8 +627,9 @@ func init() {
 	flags.StringSlice(option.Labels, []string{}, "List of label prefixes used to determine identity of an endpoint")
 	option.BindEnv(option.Labels)
 
-	flags.String(option.LB, "", "Enables load balancer mode where load balancer bpf program is attached to the given interface")
-	option.BindEnv(option.LB)
+	flags.String(option.LBDeprecated, "", "Enables load balancer mode where load balancer bpf program is attached to the given interface")
+	flags.MarkDeprecated(option.LBDeprecated, "Direct device load-balancing will be deprecated in 1.7")
+	option.BindEnv(option.LBDeprecated)
 
 	flags.Bool(option.EnableNodePort, false, "Enable NodePort type services by Cilium (beta)")
 	option.BindEnv(option.EnableNodePort)
@@ -1089,6 +1095,10 @@ func initEnv(cmd *cobra.Command) {
 				log.Warn("Running Cilium in flannel mode requires IPv6 mode be 'false'. Disabling IPv6 mode")
 				option.Config.EnableIPv6 = false
 			}
+			if option.Config.FlannelManageExistingContainers && !option.Config.WorkloadsEnabled() {
+				log.Warnf("Managing existing flannel containers with Cilium requires container workloads. Changing %s to %q", option.ContainerRuntime, "auto")
+				option.Config.Workloads = option.ContainerRuntimeAuto
+			}
 		}
 	case option.DatapathModeIpvlan:
 		if option.Config.Tunnel != "" && option.Config.Tunnel != option.TunnelDisabled {
@@ -1382,6 +1392,7 @@ func runDaemon() {
 
 	if option.Config.IsFlannelMasterDeviceSet() {
 		// health checking is not supported by flannel
+		log.Warnf("Running Cilium in flannel mode doesn't support health checking. Changing %s mode to %t", option.EnableHealthChecking, false)
 		option.Config.EnableHealthChecking = false
 
 		err := node.SetInternalIPv4From(option.Config.FlannelMasterDevice)
@@ -1455,9 +1466,10 @@ func runDaemon() {
 			log.WithError(err).Fatal("Unable to read CNI configuration file")
 		}
 
-		err = ioutil.WriteFile(option.Config.WriteCNIConfigurationWhenReady, input, 0644)
-		if err != nil {
+		if err = ioutil.WriteFile(option.Config.WriteCNIConfigurationWhenReady, input, 0644); err != nil {
 			log.WithError(err).Fatalf("Unable to write CNI configuration file to %s", option.Config.WriteCNIConfigurationWhenReady)
+		} else {
+			log.Infof("Wrote CNI configuration file to %s", option.Config.WriteCNIConfigurationWhenReady)
 		}
 	}
 

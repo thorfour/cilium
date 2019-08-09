@@ -333,6 +333,11 @@ func (d *Daemon) initK8sSubsystem() <-chan struct{} {
 			// being restored to have the right identity.
 			k8sAPIGroupPodV1Core,
 		)
+		// CiliumEndpoint is used to synchronize the ipcache, wait for
+		// it unless it is disabled
+		if !option.Config.DisableCiliumEndpointCRD {
+			d.waitForCacheSync(k8sAPIGroupCiliumEndpointV2)
+		}
 		close(cachesSynced)
 	}()
 
@@ -1908,9 +1913,17 @@ func endpointUpdated(endpoint *types.CiliumEndpoint) {
 	}
 
 	if endpoint.Networking != nil {
+		if endpoint.Networking.NodeIP == "" {
+			// When upgrading from an older version, the nodeIP may
+			// not be available yet in the CiliumEndpoint and we
+			// have to wait for it to be propagated
+			return
+		}
+
 		nodeIP := net.ParseIP(endpoint.Networking.NodeIP)
 		if nodeIP == nil {
 			log.WithField("nodeIP", endpoint.Networking.NodeIP).Warning("Unable to parse node IP while processing CiliumEndpoint update")
+			return
 		}
 
 		for _, pair := range endpoint.Networking.Addressing {

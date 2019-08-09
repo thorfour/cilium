@@ -38,22 +38,26 @@ func ExpectKubeDNSReady(vm *helpers.Kubectl) {
 // ExpectCiliumReady is a wrapper around helpers/WaitForPods. It asserts that
 // the error returned by that function is nil.
 func ExpectCiliumReady(vm *helpers.Kubectl) {
-	ExpectCiliumRunning(vm)
-	err := vm.CiliumPreFlightCheck()
+	err := vm.WaitforPods(helpers.KubeSystemNamespace, "-l k8s-app=cilium", longTimeout)
+	ExpectWithOffset(1, err).Should(BeNil(), "cilium was not able to get into ready state")
+
+	err = vm.CiliumPreFlightCheck()
 	ExpectWithOffset(1, err).Should(BeNil(), "cilium pre-flight checks failed")
 }
 
 // ExpectCiliumOperatorReady is a wrapper around helpers/WaitForPods. It asserts that
 // the error returned by that function is nil.
 func ExpectCiliumOperatorReady(vm *helpers.Kubectl) {
-	ExpectDeployReady(vm, "kube-system", "cilium-operator", longTimeout)
+	err := vm.WaitforPods(helpers.KubeSystemNamespace, "-l name=cilium-operator", longTimeout)
+	ExpectWithOffset(1, err).Should(BeNil(), "Cilium operator was not able to get into ready state")
 }
 
-// ExpectCiliumRunning is a wrapper around helpers/WaitForPodsRunning. It
-// asserts the cilium pods are running on all nodes.
+// ExpectCiliumRunning is a wrapper around helpers/WaitForNPods. It
+// asserts the cilium pods are running on all nodes (but not yet ready!).
 func ExpectCiliumRunning(vm *helpers.Kubectl) {
-	err := vm.WaitforDaemonSetReady(helpers.KubeSystemNamespace, "cilium", longTimeout)
+	err := vm.WaitforNPodsRunning(helpers.KubeSystemNamespace, "-l k8s-app=cilium", vm.GetNumNodes(), longTimeout)
 	ExpectWithOffset(1, err).Should(BeNil(), "cilium was not able to get into ready state")
+
 }
 
 // ExpectAllPodsTerminated is a wrapper around helpers/WaitCleanAllTerminatingPods.
@@ -63,7 +67,7 @@ func ExpectAllPodsTerminated(vm *helpers.Kubectl) {
 	ExpectWithOffset(1, err).To(BeNil(), "terminating containers are not deleted after timeout")
 }
 
-// ExpectETCDOperatorReady is a wrapper around helpers/ExpectDeployReady. It asserts
+// ExpectETCDOperatorReady is a wrapper around helpers/WaitForNPods. It asserts
 // the error returned by that function is nil.
 func ExpectETCDOperatorReady(vm *helpers.Kubectl) {
 	// Etcd operator creates 5 nodes (1 cilium-etcd-operator + 1 etcd-operator + 3 etcd nodes),
@@ -71,11 +75,17 @@ func ExpectETCDOperatorReady(vm *helpers.Kubectl) {
 	// so we need to wait until 5 pods are in ready state.
 	// This is to avoid cases where a few pods are ready, but the
 	// new one is not created yet.
-	By("Waiting for all etcd-operator pods are ready")
-	ExpectDeployReady(vm, "kube-system", "cilium-etcd-operator", helpers.MidCommandTimeout)
-	ExpectDeployReady(vm, "kube-system", "etcd-operator", helpers.HelperTimeout)
-	err := vm.WaitForEtcdCRDReady("kube-system", "cilium-etcd", 3, longTimeout)
-	Expect(err).To(BeNil(), fmt.Sprintf("etcdcluster not ready after timeout"))
+	By("Waiting for all etcd-operator pods to be ready")
+
+	err := vm.WaitforNPods(helpers.KubeSystemNamespace, "-l io.cilium/app=etcd-operator", 5, longTimeout)
+	warningMessage := ""
+	if err != nil {
+		res := vm.Exec(fmt.Sprintf(
+			"%s -n %s get pods -l io.cilium/app=etcd-operator",
+			helpers.KubectlCmd, helpers.KubeSystemNamespace))
+		warningMessage = res.Output().String()
+	}
+	Expect(err).To(BeNil(), "etcd-operator is not ready after timeout, pods status:\n %s", warningMessage)
 }
 
 // ExpectCiliumPreFlightInstallReady is a wrapper around helpers/WaitForNPods.
@@ -83,7 +93,7 @@ func ExpectETCDOperatorReady(vm *helpers.Kubectl) {
 func ExpectCiliumPreFlightInstallReady(vm *helpers.Kubectl) {
 	By("Waiting for all cilium pre-flight pods to be ready")
 
-	err := vm.WaitforDaemonSetReady(helpers.KubeSystemNamespace, "cilium-pre-flight-check", longTimeout)
+	err := vm.WaitforPods(helpers.KubeSystemNamespace, "-l k8s-app=cilium-pre-flight-check", longTimeout)
 	warningMessage := ""
 	if err != nil {
 		res := vm.Exec(fmt.Sprintf(
@@ -94,53 +104,32 @@ func ExpectCiliumPreFlightInstallReady(vm *helpers.Kubectl) {
 	Expect(err).To(BeNil(), "cilium pre-flight check is not ready after timeout, pods status:\n %s", warningMessage)
 }
 
-// ExpectDaemonSetReady is a wrapper around helpers.WaitforDaemonSetReady
-// It asserts that the error returned by that function is nil, indicating that
-// the daemonset's pods were ready within timeout.
-func ExpectDaemonSetReady(vm *helpers.Kubectl, namespace, name string, timeout time.Duration) {
-	err := vm.WaitforDaemonSetReady(namespace, name, timeout)
-	Expect(err).To(BeNil(), "DaemonSet %s/%s not ready after timeout:\n %s", namespace, name, err)
+// DeployCiliumAndDNS deploys DNS and cilium into the kubernetes cluster
+func DeployCiliumAndDNS(vm *helpers.Kubectl) {
+	DeployCiliumOptionsAndDNS(vm, []string{})
 }
 
-// ExpectDeployReady is a wrapper around helpers.WaitforDeployReady
-// It asserts that the error returned by that function is nil, indicating that
-// the deploy's pods were ready within timeout.
-func ExpectDeployReady(vm *helpers.Kubectl, namespace, name string, timeout time.Duration) {
-	err := vm.WaitforDeployReady(namespace, name, timeout)
-	Expect(err).To(BeNil(), "Deploy %s/%s not ready after timeout:\n %s", namespace, name, err)
-}
-
-// ProvisionInfraPods deploys DNS, etcd-operator, and cilium into the kubernetes
-// cluster of which vm is a member.
-func ProvisionInfraPods(vm *helpers.Kubectl) {
-	By("Installing DNS Deployment")
-	_ = vm.Apply(helpers.DNSDeployment())
-
-	By("Deploying etcd-operator")
-	err := vm.DeployETCDOperator()
-	Expect(err).To(BeNil(), "Unable to deploy etcd operator")
-
+// DeployCiliumOptionsAndDNS deploys DNS and cilium with options into the kubernetes cluster
+func DeployCiliumOptionsAndDNS(vm *helpers.Kubectl, options []string) {
 	By("Installing Cilium")
-	err = vm.CiliumInstall(helpers.CiliumDefaultDSPatch, helpers.CiliumConfigMapPatch)
+	err := vm.CiliumInstall(options)
 	Expect(err).To(BeNil(), "Cilium cannot be installed")
 
-	By("Installing Cilium-Operator")
-	operatorIsInstalled, err := vm.CiliumOperatorInstall("head")
-	Expect(err).To(BeNil(), "Cannot install Cilium Operator")
+	ExpectCiliumReady(vm)
+
+	By("Installing DNS Deployment")
+	_ = vm.Apply(helpers.DNSDeployment())
 
 	switch helpers.GetCurrentIntegration() {
 	case helpers.CIIntegrationFlannel:
 		ExpectCiliumRunning(vm)
+		By("Installing Flannel")
 		vm.Apply(helpers.GetFilePath("../examples/kubernetes/addons/flannel/flannel.yaml"))
 	default:
 	}
 
-	ExpectETCDOperatorReady(vm)
 	Expect(vm.WaitKubeDNS()).To(BeNil(), "KubeDNS is not ready after timeout")
-	ExpectCiliumReady(vm)
-	if operatorIsInstalled {
-		ExpectCiliumOperatorReady(vm)
-	}
+	ExpectCiliumOperatorReady(vm)
 	ExpectKubeDNSReady(vm)
 }
 

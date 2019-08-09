@@ -183,6 +183,9 @@ const (
 	// K8sKubeConfigPath is the absolute path of the kubernetes kubeconfig file
 	K8sKubeConfigPath = "k8s-kubeconfig-path"
 
+	// K8sServiceCacheSize is service cache size for cilium k8s package.
+	K8sServiceCacheSize = "k8s-service-cache-size"
+
 	// K8sWatcherQueueSize is the queue size used to serialize each k8s event type
 	K8sWatcherQueueSize = "k8s-watcher-queue-size"
 
@@ -204,8 +207,10 @@ const (
 	// LabelPrefixFile is the valid label prefixes file path
 	LabelPrefixFile = "label-prefix-file"
 
-	// LB enables load balancer mode where load balancer bpf program is attached to the given interface
-	LB = "lb"
+	// LBDeprecated is the deprecated option that used to enable load
+	// balancer mode where load balancer bpf program is attached to the
+	// given interface
+	LBDeprecated = "lb"
 
 	// EnableNodePort enables NodePort services implemented by Cilium in BPF
 	EnableNodePort = "enable-node-port"
@@ -572,9 +577,13 @@ const (
 	IdentityAllocationModeCRD = "crd"
 )
 
-// FQDNS variables
+// Default string arguments
 var (
 	FQDNRejectOptions = []string{FQDNProxyDenyWithNameError, FQDNProxyDenyWithRefused}
+
+	// ContainerRuntimeAuto is the configuration for autodetecting the
+	// container runtime backends that Cilium should use.
+	ContainerRuntimeAuto = []string{"auto"}
 )
 
 // Available option for DaemonConfig.DatapathMode
@@ -795,6 +804,9 @@ type DaemonConfig struct {
 	// IPv6 PodCIDR. Cilium will block bootstrapping until the information
 	// is available.
 	K8sRequireIPv6PodCIDR bool
+
+	// K8sServiceCacheSize is the service cache size for cilium k8s package.
+	K8sServiceCacheSize uint
 
 	// K8sForceJSONPatch when set, uses JSON Patch to update CNP and CEP
 	// status in kube-apiserver.
@@ -1170,6 +1182,7 @@ var (
 		ForceLocalPolicyEvalAtSource: defaults.ForceLocalPolicyEvalAtSource,
 		EnableEndpointRoutes:         defaults.EnableEndpointRoutes,
 		AnnotateK8sNode:              defaults.AnnotateK8sNode,
+		K8sServiceCacheSize:          defaults.K8sServiceCacheSize,
 		AutoCreateCiliumNodeResource: defaults.AutoCreateCiliumNodeResource,
 		IdentityAllocationMode:       IdentityAllocationModeKVstore,
 	}
@@ -1285,6 +1298,10 @@ func (c *DaemonConfig) Validate() error {
 
 	if c.MTU < 0 {
 		return fmt.Errorf("MTU '%d' cannot be negative", c.MTU)
+	}
+
+	if c.IPAM == IPAMENI && c.EnableIPv6 {
+		return fmt.Errorf("IPv6 cannot be enabled in ENI IPAM mode")
 	}
 
 	switch c.Tunnel {
@@ -1500,6 +1517,7 @@ func (c *DaemonConfig) Populate() {
 	c.K8sKubeConfigPath = viper.GetString(K8sKubeConfigPath)
 	c.K8sRequireIPv4PodCIDR = viper.GetBool(K8sRequireIPv4PodCIDRName)
 	c.K8sRequireIPv6PodCIDR = viper.GetBool(K8sRequireIPv6PodCIDRName)
+	c.K8sServiceCacheSize = uint(viper.GetInt(K8sServiceCacheSize))
 	c.K8sForceJSONPatch = viper.GetBool(K8sForceJSONPatch)
 	c.K8sEventHandover = viper.GetBool(K8sEventHandover)
 	c.K8sWatcherQueueSize = uint(viper.GetInt(K8sWatcherQueueSize))
@@ -1514,7 +1532,7 @@ func (c *DaemonConfig) Populate() {
 	c.IPAllocationTimeout = viper.GetDuration(IPAllocationTimeout)
 	c.LabelPrefixFile = viper.GetString(LabelPrefixFile)
 	c.Labels = viper.GetStringSlice(Labels)
-	c.LBInterface = viper.GetString(LB)
+	c.LBInterface = viper.GetString(LBDeprecated)
 	c.LibDir = viper.GetString(LibDir)
 	c.LogDriver = viper.GetStringSlice(LogDriver)
 	c.LogSystemLoadConfig = viper.GetBool(LogSystemLoadConfigName)
@@ -1522,6 +1540,7 @@ func (c *DaemonConfig) Populate() {
 	c.LoopbackIPv4 = viper.GetString(LoopbackIPv4)
 	c.Masquerade = viper.GetBool(Masquerade)
 	c.InstallIptRules = viper.GetBool(InstallIptRules)
+	c.IPSecKeyFile = viper.GetString(IPSecKeyFileName)
 	c.ModePreFilter = viper.GetString(PrefilterMode)
 	c.MonitorAggregation = viper.GetString(MonitorAggregationName)
 	c.MonitorQueueSize = viper.GetInt(MonitorQueueSizeName)

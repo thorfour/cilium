@@ -14,16 +14,23 @@
 
 package config
 
-import "flag"
+import (
+	"flag"
+	"time"
+)
 
 // CiliumTestConfigType holds all of the configurable elements of the testsuite
 type CiliumTestConfigType struct {
-	Reprovision      bool
-	HoldEnvironment  bool
-	SSHConfig        string
-	ShowCommands     bool
-	TestScope        string
-	SkipLogGathering bool
+	Reprovision         bool
+	HoldEnvironment     bool
+	SSHConfig           string
+	ShowCommands        bool
+	TestScope           string
+	SkipLogGathering    bool
+	CiliumImage         string
+	CiliumOperatorImage string
+	ProvisionK8s        bool
+	Timeout             time.Duration
 }
 
 // CiliumTestConfig holds the global configuration of commandline flags
@@ -44,4 +51,12 @@ func (c *CiliumTestConfigType) ParseFlags() {
 		"Output which commands are ran to stdout")
 	flag.StringVar(&c.TestScope, "cilium.testScope", "",
 		"Specifies scope of test to be ran (k8s, Nightly, runtime)")
+	flag.StringVar(&c.CiliumImage, "cilium.image", "",
+		"Specifies which image of cilium to use during tests")
+	flag.StringVar(&c.CiliumOperatorImage, "cilium.operator-image", "",
+		"Specifies which image of cilium-operator to use during tests")
+	flag.BoolVar(&c.ProvisionK8s, "cilium.provision-k8s", true,
+		"Specifies whether Kubernetes should be deployed and installed via kubeadm or not")
+	flag.DurationVar(&c.Timeout, "cilium.timeout", 24*time.Hour,
+		"Specifies timeout for test run")
 }

@@ -717,7 +717,7 @@ func NewDaemon(dp datapath.Datapath) (*Daemon, *endpointRestoreState, error) {
 
 	authKeySize, err := setupIPSec()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("unable to setup encryption: %s", err)
 	}
 
 	mtuConfig := mtu.NewConfiguration(authKeySize, option.Config.EnableIPSec, option.Config.Tunnel != option.TunnelDisabled, configuredMTU)
@@ -939,6 +939,9 @@ func setupIPSec() (int, error) {
 		}
 	}
 	node.SetIPsecKeyIdentity(spi)
+	if option.Config.EncryptNode == false {
+		ipsec.DeleteIPsecEncryptRoute()
+	}
 
 	return authKeySize, nil
 }
@@ -1119,4 +1122,10 @@ func (d *Daemon) GetNodeSuffix() string {
 // daemon instance. This may return nil when no configuration is available.
 func (d *Daemon) GetNetConf() *cnitypes.NetConf {
 	return d.netConf
+}
+
+// UpdateCiliumNodeResource implements nodediscovery.Owner to create/update the
+// CiliumNode resource
+func (d *Daemon) UpdateCiliumNodeResource() {
+	d.nodeDiscovery.UpdateCiliumNodeResource(d)
 }

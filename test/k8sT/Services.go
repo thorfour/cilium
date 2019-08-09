@@ -51,7 +51,7 @@ var _ = Describe("K8sServicesTest", func() {
 		var err error
 
 		kubectl = helpers.CreateKubectl(helpers.K8s1VMName(), logger)
-		ProvisionInfraPods(kubectl)
+		DeployCiliumAndDNS(kubectl)
 
 		ciliumPodK8s1, err = kubectl.GetCiliumPodOnNode(helpers.KubeSystemNamespace, helpers.K8s1)
 		Expect(err).Should(BeNil(), "Cannot get cilium pod on k8s1")
@@ -120,9 +120,6 @@ var _ = Describe("K8sServicesTest", func() {
 		BeforeEach(func() {
 			res := kubectl.Apply(demoYAML)
 			res.ExpectSuccess("unable to apply %s", demoYAML)
-			ExpectDeployReady(kubectl, helpers.DefaultNamespace, helpers.App1, helpers.HelperTimeout)
-			ExpectDeployReady(kubectl, helpers.DefaultNamespace, helpers.App2, helpers.HelperTimeout)
-			ExpectDeployReady(kubectl, helpers.DefaultNamespace, helpers.App3, helpers.HelperTimeout)
 		})
 
 		AfterEach(func() {
@@ -157,20 +154,18 @@ var _ = Describe("K8sServicesTest", func() {
 	Context("Checks service across nodes", func() {
 
 		var (
-			demoDS = helpers.ManifestGet("demo_ds.yaml")
+			demoYAML = helpers.ManifestGet("demo_ds.yaml")
 		)
 
 		BeforeAll(func() {
-			res := kubectl.Apply(demoDS)
-			res.ExpectSuccess("Unable to apply %s", demoDS)
-			ExpectDaemonSetReady(kubectl, helpers.DefaultNamespace, "testds", helpers.HelperTimeout)
-			ExpectDaemonSetReady(kubectl, helpers.DefaultNamespace, "testclient", helpers.HelperTimeout)
+			res := kubectl.Apply(demoYAML)
+			res.ExpectSuccess("Unable to apply %s", demoYAML)
 		})
 
 		AfterAll(func() {
 			// Explicitly ignore result of deletion of resources to avoid incomplete
 			// teardown if any step fails.
-			_ = kubectl.Delete(demoDS)
+			_ = kubectl.Delete(demoYAML)
 			ExpectAllPodsTerminated(kubectl)
 		})
 
@@ -439,6 +434,8 @@ var _ = Describe("K8sServicesTest", func() {
 		})
 
 		It("Connects to service IP backed by external IPs", func() {
+			err := kubectl.WaitForKubeDNSEntry("external-ips-service", helpers.DefaultNamespace)
+			Expect(err).To(BeNil(), "DNS entry is not ready after timeout")
 			shouldConnect(podName, serviceName)
 		})
 

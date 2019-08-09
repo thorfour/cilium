@@ -23,8 +23,7 @@ Installation
    :maxdepth: 1
    :glob:
 
-   minikube
-   microk8s
+   k8s-install-sandbox
    k8s-install-self-managed
    k8s-install-managed
    k8s-installers
@@ -52,6 +51,7 @@ Advanced Networking
    :maxdepth: 1
    :glob:
 
+   aws-eni
    kube-router
    clustermesh
    flannel-integration

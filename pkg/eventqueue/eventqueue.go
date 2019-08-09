@@ -15,9 +15,12 @@
 package eventqueue
 
 import (
+	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 
+	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
@@ -61,13 +64,11 @@ type EventQueue struct {
 	// closeOnce is used to ensure that the EventQueue can only be closed once.
 	closeOnce sync.Once
 
-	// closeWaitGroup ensures that the events channel is not closed before all
-	// events have been consumed off of it.
-	closeWaitGroup sync.WaitGroup
-
 	// name is used to differentiate this EventQueue from other EventQueues that
 	// are also running in logs
 	name string
+
+	eventsMu lock.RWMutex
 }
 
 // NewEventQueue returns an EventQueue with a capacity for only one event at
@@ -123,6 +124,10 @@ type Event struct {
 	// stats is a field which contains information about when this event is
 	// enqueued, dequeued, etc.
 	stats eventStatistics
+
+	// enqueued is an atomic boolean that specifies whether this event has
+	// been enqueued on an EventQueue.
+	enqueued int32
 }
 
 type eventStatistics struct {
@@ -167,16 +172,27 @@ func (ev *Event) WasCancelled() bool {
 // Enqueue pushes the given event onto the EventQueue. If the queue has been
 // stopped, the Event will not be enqueued, and its cancel channel will be
 // closed, indicating that the Event was not ran. This function may block if
-// the queue is at its capacity for events.
-func (q *EventQueue) Enqueue(ev *Event) <-chan interface{} {
-
+// the queue is at its capacity for events. If a single Event has Enqueue
+// called on it multiple times asynchronously, there is no guarantee as to
+// which one will return the channel which passes results back to the caller.
+// It is up to the caller to check whether the returned channel is nil, as
+// waiting to receive on such a channel will block forever. Returns an error
+// if the Event has been previously enqueued, if the Event is nil, or the queue
+// itself is not initialized properly.
+func (q *EventQueue) Enqueue(ev *Event) (<-chan interface{}, error) {
 	if q.notSafeToAccess() || ev == nil {
-		return nil
+		return nil, fmt.Errorf("unable to Enqueue event")
 	}
 
-	// Track that event has been Enqueued.
-	q.closeWaitGroup.Add(1)
-	defer q.closeWaitGroup.Done()
+	// Events can only be enqueued once.
+	if atomic.AddInt32(&ev.enqueued, 1) > 1 {
+		return nil, fmt.Errorf("unable to Enqueue event; event has already had Enqueue called on it")
+	}
+
+	// Multiple Enqueues can occur at the same time. Ensure that events channel
+	// is not closed while we are enqueueing events.
+	q.eventsMu.RLock()
+	defer q.eventsMu.RUnlock()
 
 	select {
 	// The event should be drained from the queue (e.g., it should not be
@@ -186,7 +202,7 @@ func (q *EventQueue) Enqueue(ev *Event) <-chan interface{} {
 		close(ev.cancelled)
 		close(ev.eventResults)
 
-		return ev.eventResults
+		return ev.eventResults, nil
 	default:
 		// The events channel may be closed even if an event has been pushed
 		// onto the events channel, as events are consumed off of the events
@@ -197,7 +213,7 @@ func (q *EventQueue) Enqueue(ev *Event) <-chan interface{} {
 		q.events <- ev
 		ev.stats.waitEnqueue.End(true)
 		ev.stats.waitConsumeOffQueue.Start()
-		return ev.eventResults
+		return ev.eventResults, nil
 	}
 }
 
@@ -269,18 +285,12 @@ func (q *EventQueue) Stop() {
 		// immediately in Enqueue().
 		close(q.drain)
 
-		// Wait for all events which have been queued to be processed. If
-		// a large amount of events are continuously enqueued at this point,
-		// then this may block. But, in most scenarios, this should exit
-		// fairly quickly.
-		q.closeWaitGroup.Wait()
-
 		// Signal that the queue has been drained.
 		close(q.close)
 
-		// This will cause Run() to receive a nil event.
+		q.eventsMu.Lock()
 		close(q.events)
-
+		q.eventsMu.Unlock()
 	})
 }
 

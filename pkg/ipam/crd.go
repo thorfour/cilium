@@ -93,6 +93,10 @@ func newNodeStore(nodeName string, owner Owner) *nodeStore {
 	}
 	store.refreshTrigger = t
 
+	// Create the CiliumNode custom resource. This call will block until
+	// the custom resource has been created
+	owner.UpdateCiliumNodeResource()
+
 	ciliumNodeSelector := fields.ParseSelectorOrDie("metadata.name=" + nodeName)
 	ciliumNodeStore := cache.NewStore(cache.DeletionHandlingMetaNamespaceKeyFunc)
 	ciliumNodeInformer := informer.NewInformerWithStore(
@@ -152,15 +156,17 @@ func newNodeStore(nodeName string, owner Owner) *nodeStore {
 
 	for {
 		minimumReached, required, numAvailable := store.hasMinimumIPsInPool()
-		if minimumReached {
-			break
-		}
-
-		log.WithFields(logrus.Fields{
+		logFields := logrus.Fields{
 			fieldName:   nodeName,
 			"required":  required,
 			"available": numAvailable,
-		}).Info("Waiting for IPs to become available in CRD-backed allocation pool")
+		}
+		if minimumReached {
+			log.WithFields(logFields).Info("All required IPs are available in CRD-backed allocation pool")
+			break
+		}
+
+		log.WithFields(logFields).Info("Waiting for IPs to become available in CRD-backed allocation pool")
 		time.Sleep(5 * time.Second)
 	}
 

@@ -37,9 +37,7 @@ import (
 	"github.com/cilium/cilium/test/helpers/logutils"
 
 	"github.com/asaskevich/govalidator"
-	go_version "github.com/hashicorp/go-version"
 	"github.com/sirupsen/logrus"
-	apps_v1 "k8s.io/api/apps/v1"
 	"k8s.io/api/core/v1"
 )
 
@@ -64,6 +62,25 @@ const (
 	// CIIntegrationFlannel contains the constant to be used when flannel is
 	// used in the CI.
 	CIIntegrationFlannel = "flannel"
+)
+
+var (
+	defaultHelmOptions = map[string]string{
+		"global.registry":               "k8s1:5000/cilium",
+		"agent.image":                   "cilium-dev",
+		"agent.tag":                     "latest",
+		"operator.image":                "operator",
+		"operator.tag":                  "latest",
+		"managed-etcd.registry":         "docker.io/cilium",
+		"global.debug.enabled":          "true",
+		"global.k8s.requireIPv4PodCIDR": "true",
+		"global.pprof.enabled":          "true",
+		"global.logSystemLoad":          "true",
+		"global.bpf.preallocateMaps":    "true",
+		"global.etcd.leaseTTL":          "30s",
+		"global.ipv4.enabled":           "true",
+		"global.ipv6.enabled":           "true",
+	}
 )
 
 // GetCurrentK8SEnv returns the value of K8S_VERSION from the OS environment.
@@ -173,10 +190,21 @@ func (kub *Kubectl) ExecPodCmd(namespace string, pod string, cmd string, options
 	return kub.Exec(command, options...)
 }
 
-// ExecPodCmdContext executes command cmd in background in the specified pod residing
+// ExecPodCmdContext synchronously executes command cmd in the specified pod residing in the
+// specified namespace. It returns a pointer to CmdRes with all the output.
+func (kub *Kubectl) ExecPodCmdContext(ctx context.Context, namespace string, pod string, cmd string, options ...ExecOptions) *CmdRes {
+	command := fmt.Sprintf("%s exec -n %s %s -- %s", KubectlCmd, namespace, pod, cmd)
+	return kub.ExecContext(ctx, command, options...)
+}
+
+// ExecPodCmdBackground executes command cmd in background in the specified pod residing
 // in the specified namespace. It returns a pointer to CmdRes with all the
 // output
-func (kub *Kubectl) ExecPodCmdContext(ctx context.Context, namespace string, pod string, cmd string, options ...ExecOptions) *CmdRes {
+//
+// To receive the output of this function, the caller must invoke either
+// kub.WaitUntilFinish() or kub.WaitUntilMatch() then subsequently fetch the
+// output out of the result.
+func (kub *Kubectl) ExecPodCmdBackground(ctx context.Context, namespace string, pod string, cmd string, options ...ExecOptions) *CmdRes {
 	command := fmt.Sprintf("%s exec -n %s %s -- %s", KubectlCmd, namespace, pod, cmd)
 	return kub.ExecInBackground(ctx, command, options...)
 }
@@ -575,72 +603,51 @@ func (kub *Kubectl) NamespaceDelete(name string) *CmdRes {
 	return kub.ExecShort(fmt.Sprintf("%s delete namespace %s", KubectlCmd, name))
 }
 
-// WaitforDeployReady waits for all required replicas of a deployment to be
-// ready. Upon timeout an error is returned.
-func (kub *Kubectl) WaitforDeployReady(namespace, name string, timeout time.Duration) error {
-	var specReplicas, currentReplicas int32
-
-	body := func() bool {
-		deploy := apps_v1.Deployment{}
-		cmdRes := kub.ExecShort(fmt.Sprintf("%s -n %s get deploy %s -o json", KubectlCmd, namespace, name))
-		if cmdRes == nil {
-			kub.logger.Infof("kubectl.Exec returned nil result while getting Deployment for %s/%s", namespace, name)
-			return false
-		}
-
-		err := cmdRes.Unmarshal(&deploy)
-		if err != nil {
-			kub.logger.Infof("Error while getting Deployment for %s/%s: %s", namespace, name, err)
-			return false
-		}
-
-		specReplicas = deploy.Status.Replicas
-		currentReplicas = deploy.Status.ReadyReplicas
-
-		return currentReplicas >= specReplicas
-	}
-
-	return WithTimeout(
-		body,
-		fmt.Sprintf("Deployment %s/%s not ready after %s (%d/%d ready)", namespace, name, timeout, currentReplicas, specReplicas),
-		&TimeoutConfig{Timeout: timeout})
-}
-
-// WaitforDaemonSetReady waits for all required replicas of a daemonset to be
-// ready. Upon timeout an error is returned.
-func (kub *Kubectl) WaitforDaemonSetReady(namespace, name string, timeout time.Duration) error {
-	var specReplicas, currentReplicas int32
-
-	body := func() bool {
-		ds := apps_v1.DaemonSet{}
-		cmdRes := kub.ExecShort(fmt.Sprintf("%s -n %s get daemonset %s -o json", KubectlCmd, namespace, name))
-		if cmdRes == nil {
-			kub.logger.Infof("kubectl.Exec returned nil result while getting DaemonSet for %s/%s", namespace, name)
-			return false
-		}
-
-		err := cmdRes.Unmarshal(&ds)
-		if err != nil {
-			kub.logger.Infof("Error while getting DaemonSet for %s/%s: %s", namespace, name, err)
-			return false
-		}
-
-		return ds.Status.NumberUnavailable == 0
-	}
-
-	return WithTimeout(
-		body,
-		fmt.Sprintf("DaemonSet %s/%s not ready after %s (%d/%d ready)", namespace, name, timeout, currentReplicas, specReplicas),
-		&TimeoutConfig{Timeout: timeout})
-}
-
 // WaitforPods waits up until timeout seconds have elapsed for all pods in the
 // specified namespace that match the provided JSONPath filter to have their
 // containterStatuses equal to "ready". Returns true if all pods achieve
 // the aforementioned desired state within timeout seconds. Returns false and
 // an error if the command failed or the timeout was exceeded.
 func (kub *Kubectl) WaitforPods(namespace string, filter string, timeout time.Duration) error {
-	return kub.WaitforNPods(namespace, filter, 0, timeout)
+	return kub.waitForNPods(checkReady, namespace, filter, 0, timeout)
+}
+
+// checkPodStatusFunc returns true if the pod is in the desired state, or false
+// otherwise.
+type checkPodStatusFunc func(v1.Pod) bool
+
+// checkRunning checks that the pods are running, but not necessarily ready.
+func checkRunning(pod v1.Pod) bool {
+	if pod.Status.Phase != v1.PodRunning || pod.ObjectMeta.DeletionTimestamp != nil {
+		return false
+	}
+	return true
+}
+
+// checkReady determines whether the pods are running and ready.
+func checkReady(pod v1.Pod) bool {
+	if !checkRunning(pod) {
+		return false
+	}
+
+	for _, container := range pod.Status.ContainerStatuses {
+		if !container.Ready {
+			return false
+		}
+	}
+	return true
+}
+
+// WaitforNPodsRunning waits up until timeout seconds have elapsed for at least
+// minRequired pods in the specified namespace that match the provided JSONPath
+// filter to have their containterStatuses equal to "running".
+// Returns no error if minRequired pods achieve the aforementioned desired
+// state within timeout seconds. Returns an error if the command failed or the
+// timeout was exceeded.
+// When minRequired is 0, the function will derive required pod count from number
+// of pods in the cluster for every iteration.
+func (kub *Kubectl) WaitforNPodsRunning(namespace string, filter string, minRequired int, timeout time.Duration) error {
+	return kub.waitForNPods(checkRunning, namespace, filter, minRequired, timeout)
 }
 
 // WaitforNPods waits up until timeout seconds have elapsed for at least
@@ -652,6 +659,10 @@ func (kub *Kubectl) WaitforPods(namespace string, filter string, timeout time.Du
 // When minRequired is 0, the function will derive required pod count from number
 // of pods in the cluster for every iteration.
 func (kub *Kubectl) WaitforNPods(namespace string, filter string, minRequired int, timeout time.Duration) error {
+	return kub.waitForNPods(checkReady, namespace, filter, minRequired, timeout)
+}
+
+func (kub *Kubectl) waitForNPods(checkStatus checkPodStatusFunc, namespace string, filter string, minRequired int, timeout time.Duration) error {
 	body := func() bool {
 		podList := &v1.PodList{}
 		err := kub.GetPods(namespace, filter).Unmarshal(podList)
@@ -678,19 +689,10 @@ func (kub *Kubectl) WaitforNPods(namespace string, filter string, minRequired in
 		//  - All containers in the pod have passed the liveness check via
 		//  containerStatuses.Ready
 		currScheduled := 0
-	perPod:
 		for _, pod := range podList.Items {
-			if pod.Status.Phase != v1.PodRunning || pod.ObjectMeta.DeletionTimestamp != nil {
-				continue perPod
+			if checkStatus(pod) {
+				currScheduled++
 			}
-
-			for _, container := range pod.Status.ContainerStatuses {
-				if !container.Ready {
-					continue perPod
-				}
-			}
-
-			currScheduled++
 		}
 
 		return currScheduled >= required
@@ -994,83 +996,94 @@ func (kub *Kubectl) ciliumInstall(dsPatchName, cmPatchName string, getK8sDescrip
 	if err := kub.DeployPatch(dsPathname, getK8sDescriptorPatch(dsPatchName)); err != nil {
 		return err
 	}
+
+	cmdRes := kub.Apply(getK8sDescriptor(ciliumEtcdOperatorSA))
+	if !cmdRes.WasSuccessful() {
+		return fmt.Errorf("Unable to deploy descriptor of etcd-operator SA %s: %s", ciliumEtcdOperatorSA, cmdRes.OutputPrettyPrint())
+	}
+
+	cmdRes = kub.Apply(getK8sDescriptor(ciliumEtcdOperatorRBAC))
+	if !cmdRes.WasSuccessful() {
+		return fmt.Errorf("Unable to deploy descriptor of etcd-operator RBAC %s: %s", ciliumEtcdOperatorRBAC, cmdRes.OutputPrettyPrint())
+	}
+
+	cmdRes = kub.Apply(getK8sDescriptor(ciliumEtcdOperator))
+	if !cmdRes.WasSuccessful() {
+		return fmt.Errorf("Unable to deploy descriptor of etcd-operator %s: %s", ciliumEtcdOperator, cmdRes.OutputPrettyPrint())
+	}
+
+	_ = kub.Apply(getK8sDescriptor("cilium-operator-sa.yaml"))
+	err := kub.DeployPatch(getK8sDescriptor("cilium-operator.yaml"), getK8sDescriptorPatch("cilium-operator-patch.yaml"))
+	if err != nil {
+		return fmt.Errorf("Unable to deploy descriptor of cilium-operators: %s", err)
+	}
+
 	return nil
 }
 
-// CiliumOperatorInstall installs Cilium operator if it is supported/required
-// by versionTag.
-func (kub *Kubectl) CiliumOperatorInstall(versionTag string) (installed bool, err error) {
-	var (
-		ciliumOperatorSampleFile   string
-		ciliumOperatorPatchFile    string
-		ciliumOperatorSaSampleFile string
-
-		ciliumOperatorYamlName   = "cilium-operator.yaml"
-		ciliumOperatorSAYamlName = "cilium-operator-sa.yaml"
-	)
-
-	getFileFromOlderVersion := func(filename string) string {
-		return fmt.Sprintf("https://raw.githubusercontent.com/cilium/cilium/%s/examples/kubernetes/%s/%s",
-			versionTag, GetCurrentK8SEnv(), filename)
-	}
-
-	cst, _ := go_version.NewVersion("0")
-
-	if versionTag != "head" {
-		cst, err = go_version.NewVersion(versionTag)
-		if err != nil {
-			return false, fmt.Errorf("Not a valid version: %s", err)
+func addIfNotOverwritten(options []string, field, value string) []string {
+	for _, s := range options {
+		if strings.HasPrefix(s, "--set "+field) {
+			return options
 		}
 	}
 
-	switch {
-	case CiliumV1_0.Check(cst):
-		return false, nil
-	case CiliumV1_1.Check(cst):
-		return false, nil
-	case CiliumV1_2.Check(cst):
-		return false, nil
-	case CiliumV1_3.Check(cst):
-		return false, nil
-	case CiliumV1_4.Check(cst):
-		ciliumOperatorSampleFile = getFileFromOlderVersion(ciliumOperatorYamlName)
-		ciliumOperatorPatchFile = ""
-		ciliumOperatorSaSampleFile = getFileFromOlderVersion(ciliumOperatorSAYamlName)
-	default:
-		ciliumOperatorSampleFile = GetK8sDescriptor(ciliumOperatorYamlName)
-		ciliumOperatorPatchFile = ManifestGet("cilium-operator-patch.yaml")
-		ciliumOperatorSaSampleFile = GetK8sDescriptor(ciliumOperatorSAYamlName)
-	}
-
-	_ = kub.Apply(ciliumOperatorSaSampleFile)
-	if ciliumOperatorPatchFile != "" {
-		return true, kub.DeployPatch(ciliumOperatorSampleFile, ciliumOperatorPatchFile)
-	}
-	return true, kub.Apply(ciliumOperatorSampleFile).GetErr("Cannot install cilium operator")
+	options = append(options, "--set "+field+"="+value)
+	return options
 }
 
-// CiliumInstall installs all Cilium descriptors into kubernetes.
-// dsPatchName corresponds to the DaemonSet patch that will be applied to the
-// original Cilium DaemonSet descriptor.
-// cmPatchName corresponds to the ConfigMap patch that will be applied to the
-// original Cilium ConfigMap descriptor.
-// Returns an error if any patch or if any original descriptors files were not
-// found.
-func (kub *Kubectl) CiliumInstall(dsPatchName, cmPatchName string) error {
-	return kub.ciliumInstall(dsPatchName, cmPatchName, GetK8sDescriptor, ManifestGet)
+func (kub *Kubectl) generateCiliumYaml(options []string, filename string) error {
+	for key, value := range defaultHelmOptions {
+		options = addIfNotOverwritten(options, key, value)
+	}
+
+	// TODO GH-8753: Use helm rendering library instead of shelling out to
+	// helm template
+	res := kub.ExecMiddle(fmt.Sprintf("helm template %s --namespace=kube-system %s > %s",
+		HelmTemplate, strings.Join(options, " "), filename))
+	if !res.WasSuccessful() {
+		return res.GetErr("Unable to generate YAML")
+	}
+
+	return nil
 }
 
-// CiliumPreFlightInstall install Cilium pre-flight DaemonSet.
-func (kub *Kubectl) CiliumPreFlightInstall(patchName string) error {
-	dsPathname := GetK8sDescriptor(CiliumDefaultPreFlight)
-	if dsPathname == "" {
-		return fmt.Errorf("Cilium Pre-flight DaemonSet descriptor not found")
+// ciliumInstallHelm installs Cilium with the Helm options provided.
+func (kub *Kubectl) ciliumInstallHelm(options []string) error {
+	if err := kub.generateCiliumYaml(options, "cilium.yaml"); err != nil {
+		return err
 	}
-	patchFilepath := ManifestGet(patchName)
-	if patchFilepath == "" {
-		return fmt.Errorf("Cilium pre-flight DaemonSet patch not found")
+
+	res := kub.Apply("cilium.yaml")
+	if !res.WasSuccessful() {
+		return res.GetErr("Unable to apply YAML")
 	}
-	return kub.DeployPatch(dsPathname, patchFilepath)
+
+	return nil
+}
+
+// ciliumUninstallHelm uninstalls Cilium with the Helm options provided.
+func (kub *Kubectl) ciliumUninstallHelm(options []string) error {
+	if err := kub.generateCiliumYaml(options, "cilium.yaml"); err != nil {
+		return err
+	}
+
+	res := kub.Delete("cilium.yaml")
+	if !res.WasSuccessful() {
+		return res.GetErr("Unable to delete YAML")
+	}
+
+	return nil
+}
+
+// CiliumInstall installs Cilium with the provided Helm options.
+func (kub *Kubectl) CiliumInstall(options []string) error {
+	return kub.ciliumInstallHelm(options)
+}
+
+// CiliumUninstall uninstalls Cilium with the provided Helm options.
+func (kub *Kubectl) CiliumUninstall(options []string) error {
+	return kub.ciliumUninstallHelm(options)
 }
 
 // CiliumInstallVersion installs all Cilium descriptors into kubernetes for
@@ -1568,14 +1581,21 @@ func (kub *Kubectl) CiliumReport(namespace string, commands ...string) {
 	res := kub.ExecContextShort(ctx, fmt.Sprintf("%s get pods -o wide --all-namespaces", KubectlCmd))
 	ginkgoext.GinkgoPrint(res.GetDebugMessage())
 
+	results := make([]*CmdRes, 0, len(pods)*len(commands))
+	ginkgoext.GinkgoPrint("Fetching command output from pods %s", pods)
 	for _, pod := range pods {
 		for _, cmd := range commands {
-			res = kub.ExecPodCmdContext(ctx, namespace, pod, cmd, ExecOptions{SkipLog: true})
-			ginkgoext.GinkgoPrint(res.GetDebugMessage())
+			res = kub.ExecPodCmdBackground(ctx, namespace, pod, cmd, ExecOptions{SkipLog: true})
+			results = append(results, res)
 		}
 	}
 
 	wg.Wait()
+
+	for _, res := range results {
+		res.WaitUntilFinish()
+		ginkgoext.GinkgoPrint(res.GetDebugMessage())
+	}
 }
 
 // EtcdOperatorReport dump etcd pods data into the report directory to be able
@@ -1610,41 +1630,6 @@ func (kub *Kubectl) EtcdOperatorReport(ctx context.Context, reportCmds map[strin
 			reportCmds[command] = fmt.Sprintf(reportFile, pod)
 		}
 	}
-}
-
-// WaitForEtcdCRDReady inspects the etcdclusters CRD to validate that the etcd
-// pods being started by the etcd-operator are ready.
-func (kub *Kubectl) WaitForEtcdCRDReady(namespace, name string, expectedCount int, timeout time.Duration) error {
-	// Test filter: https://jqplay.org/s/_rqbx7hTmI
-	jqFilter := fmt.Sprintf(`.status.members.ready | length`)
-	cmd := fmt.Sprintf("%s get etcdclusters -n %s %s -o json | jq '%s'",
-		KubectlCmd, namespace, name, jqFilter)
-	kub.logger.Infof("Querying etcdclusters on %s/%s", namespace, name)
-
-	body := func() bool {
-		res := kub.ExecShort(cmd)
-		if !res.WasSuccessful() {
-			kub.logger.WithError(res.GetErr("")).Error("cannot get etcdclusters status")
-			return false
-		}
-
-		var value int
-		if err := res.Unmarshal(&value); err != nil {
-			kub.logger.WithError(err).Error("Cannot unmarshel etcdclusters status json")
-			return false
-		}
-
-		if value != expectedCount {
-			kub.logger.Infof("Only %d/%d pods are ready", value, expectedCount)
-			return false
-		}
-		return true
-	}
-
-	return WithTimeout(
-		body,
-		"etcd pods not ready after timeout",
-		&TimeoutConfig{Timeout: timeout})
 }
 
 // CiliumCheckReport prints a few checks on the Junit output to provide more
@@ -1808,11 +1793,16 @@ func (kub *Kubectl) DumpCiliumCommandOutput(ctx context.Context, namespace strin
 			return
 		}
 
-		reportCmds := map[string]string{}
-		for cmd, logfile := range ciliumKubCLICommands {
-			command := fmt.Sprintf("%s exec -n %s %s -- %s", KubectlCmd, namespace, pod, cmd)
-			reportCmds[command] = fmt.Sprintf("%s_%s", pod, logfile)
+		genReportCmds := func(cliCmds map[string]string) map[string]string {
+			reportCmds := map[string]string{}
+			for cmd, logfile := range cliCmds {
+				command := fmt.Sprintf("%s exec -n %s %s -- %s", KubectlCmd, namespace, pod, cmd)
+				reportCmds[command] = fmt.Sprintf("%s_%s", pod, logfile)
+			}
+			return reportCmds
 		}
+
+		reportCmds := genReportCmds(ciliumKubCLICommands)
 		reportMapContext(ctx, testPath, reportCmds, kub.SSHMeta)
 
 		logsPath := filepath.Join(BasePath, testPath)
@@ -1859,8 +1849,21 @@ func (kub *Kubectl) DumpCiliumCommandOutput(ctx context.Context, namespace strin
 				continue
 			}
 			//Remove bugtool artifact, so it'll be not used if any other fail test
-			_ = kub.ExecPodCmdContext(ctx, KubeSystemNamespace, pod, fmt.Sprintf("rm /tmp/%s", line))
+			_ = kub.ExecPodCmdBackground(ctx, KubeSystemNamespace, pod, fmt.Sprintf("rm /tmp/%s", line))
 		}
+
+		// Finally, get kvstore output - this is best effort; we do this last
+		// because if connectivity to the kvstore is broken from a cilium pod,
+		// we don't want the context above to timeout and as a result, get none
+		// of the other logs from the tests.
+
+		// Use a shorter context for kvstore-related commands to avoid having
+		// further log-gathering fail as well if the first Cilium pod fails to
+		// gather kvstore logs.
+		kvstoreCmdCtx, cancel := context.WithTimeout(ctx, MidCommandTimeout)
+		defer cancel()
+		reportCmds = genReportCmds(ciliumKubCLICommandsKVStore)
+		reportMapContext(kvstoreCmdCtx, testPath, reportCmds, kub.SSHMeta)
 	}
 
 	pods, err := kub.GetCiliumPodsContext(ctx, namespace)
@@ -1965,16 +1968,12 @@ func (kub *Kubectl) GetCiliumPodOnNode(namespace string, node string) (string, e
 }
 
 func (kub *Kubectl) ciliumPreFlightCheck() error {
-	switch GetCurrentIntegration() {
-	case CIIntegrationFlannel:
-	default:
-		err := kub.ciliumStatusPreFlightCheck()
-		if err != nil {
-			return fmt.Errorf("status is unhealthy: %s", err)
-		}
+	err := kub.ciliumStatusPreFlightCheck()
+	if err != nil {
+		return fmt.Errorf("status is unhealthy: %s", err)
 	}
 
-	err := kub.ciliumControllersPreFlightCheck()
+	err = kub.ciliumControllersPreFlightCheck()
 	if err != nil {
 		return fmt.Errorf("controllers are failing: %s", err)
 	}
@@ -2315,40 +2314,39 @@ func (kub *Kubectl) ciliumServicePreFlightCheck() error {
 	return nil
 }
 
-// DeployETCDOperator deploys the etcd-operator k8s descriptors into the cluster
-// pointer by kub.
-func (kub *Kubectl) DeployETCDOperator() error {
-	cmdRes := kub.Apply(GetK8sDescriptor(ciliumEtcdOperatorSA))
-	if !cmdRes.WasSuccessful() {
-		return fmt.Errorf("Unable to deploy descriptor of etcd-operator SA %s: %s", ciliumEtcdOperatorSA, cmdRes.OutputPrettyPrint())
+// DeleteETCDOperator delete the etcd-operator from the cluster pointed by kub.
+func (kub *Kubectl) DeleteETCDOperator() {
+	if res := kub.ExecShort(fmt.Sprintf("%s -n %s delete crd etcdclusters.etcd.database.coreos.com", KubectlCmd, KubeSystemNamespace)); !res.WasSuccessful() {
+		log.Warningf("Unable to delete etcdclusters.etcd.database.coreos.com CRD: %s", res.OutputPrettyPrint())
 	}
-	cmdRes = kub.Apply(GetK8sDescriptor(ciliumEtcdOperatorRBAC))
-	if !cmdRes.WasSuccessful() {
-		return fmt.Errorf("Unable to deploy descriptor of etcd-operator RBAC %s: %s", ciliumEtcdOperatorRBAC, cmdRes.OutputPrettyPrint())
-	}
-	cmdRes = kub.Apply(GetK8sDescriptor(ciliumEtcdOperator))
-	if !cmdRes.WasSuccessful() {
-		return fmt.Errorf("Unable to deploy descriptor of etcd-operator %s: %s", ciliumEtcdOperator, cmdRes.OutputPrettyPrint())
-	}
-	return nil
-}
 
-// DeleteETCDOperator delete the etcd-operator from the cluster pointed by
-// kub.
-func (kub *Kubectl) DeleteETCDOperator() error {
-	cmdRes := kub.Delete(GetK8sDescriptor(ciliumEtcdOperator))
-	if !cmdRes.WasSuccessful() {
-		return fmt.Errorf("Unable to delete descriptor of etcd-operator %s: %s", ciliumEtcdOperator, cmdRes.OutputPrettyPrint())
+	if res := kub.ExecShort(fmt.Sprintf("%s -n %s delete deployment cilium-etcd-operator", KubectlCmd, KubeSystemNamespace)); !res.WasSuccessful() {
+		log.Warningf("Unable to delete cilium-etcd-operator Deployment: %s", res.OutputPrettyPrint())
 	}
-	cmdRes = kub.Delete(GetK8sDescriptor(ciliumEtcdOperatorRBAC))
-	if !cmdRes.WasSuccessful() {
-		return fmt.Errorf("Unable to delete descriptor of etcd-operator RBAC %s: %s", ciliumEtcdOperatorRBAC, cmdRes.OutputPrettyPrint())
+
+	if res := kub.ExecShort(fmt.Sprintf("%s delete clusterrolebinding cilium-etcd-operator", KubectlCmd)); !res.WasSuccessful() {
+		log.Warningf("Unable to delete cilium-etcd-operator ClusterRoleBinding: %s", res.OutputPrettyPrint())
 	}
-	cmdRes = kub.Delete(GetK8sDescriptor(ciliumEtcdOperatorSA))
-	if !cmdRes.WasSuccessful() {
-		return fmt.Errorf("Unable to delete descriptor of etcd-operator SA %s: %s", ciliumEtcdOperatorSA, cmdRes.OutputPrettyPrint())
+
+	if res := kub.ExecShort(fmt.Sprintf("%s delete clusterrole cilium-etcd-operator", KubectlCmd)); !res.WasSuccessful() {
+		log.Warningf("Unable to delete cilium-etcd-operator ClusterRole: %s", res.OutputPrettyPrint())
 	}
-	return nil
+
+	if res := kub.ExecShort(fmt.Sprintf("%s -n %s delete serviceaccount cilium-etcd-operator", KubectlCmd, KubeSystemNamespace)); !res.WasSuccessful() {
+		log.Warningf("Unable to delete cilium-etcd-operator ServiceAccount: %s", res.OutputPrettyPrint())
+	}
+
+	if res := kub.ExecShort(fmt.Sprintf("%s delete clusterrolebinding etcd-operator", KubectlCmd)); !res.WasSuccessful() {
+		log.Warningf("Unable to delete etcd-operator ClusterRoleBinding: %s", res.OutputPrettyPrint())
+	}
+
+	if res := kub.ExecShort(fmt.Sprintf("%s delete clusterrole etcd-operator", KubectlCmd)); !res.WasSuccessful() {
+		log.Warningf("Unable to delete etcd-operator ClusterRole: %s", res.OutputPrettyPrint())
+	}
+
+	if res := kub.ExecShort(fmt.Sprintf("%s -n %s delete serviceaccount cilium-etcd-sa", KubectlCmd, KubeSystemNamespace)); !res.WasSuccessful() {
+		log.Warningf("Unable to delete cilium-etcd-sa ServiceAccount: %s", res.OutputPrettyPrint())
+	}
 }
 
 func serviceKey(s v1.Service) string {

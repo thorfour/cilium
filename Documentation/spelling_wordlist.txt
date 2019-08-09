@@ -107,6 +107,7 @@ createtopic
 CreationDate
 cri
 crio
+crypto
 daemonset
 Dangaard
 datacenter
@@ -121,6 +122,7 @@ debuginfo
 decapsulate
 decapsulated
 decapsulation
+decrypted
 deletetopic
 demux
 dep
@@ -262,7 +264,7 @@ IP
 ipcache
 iproute
 ipsec
-IPSec
+IPsec
 iptables
 IPv
 ipvlan
@@ -302,6 +304,7 @@ keyspace
 keyspaces
 Kicinski
 kops
+kprobe
 kprobes
 kretprobes
 ksonnet
@@ -469,6 +472,7 @@ queueing
 readelf
 rebase
 rebased
+Rebasing
 recompiles
 recv
 recvmsg
@@ -599,6 +603,7 @@ ubuntu
 Ubuntu
 udp
 ui
+uint
 Uncomment
 underrepresents
 uninline
@@ -665,6 +670,7 @@ writeable
 xdp
 XDP
 Xenial
+xfrm
 xml
 xor
 xoring
