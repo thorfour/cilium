@@ -52,6 +52,9 @@ func ExpectCiliumReady(vm *helpers.Kubectl) {
 func ExpectCiliumOperatorReady(vm *helpers.Kubectl) {
 	By("Waiting for cilium-operator to be ready")
 	err := vm.WaitforPods(helpers.KubeSystemNamespace, "-l name=cilium-operator", longTimeout)
+	if err != nil {
+		By("Cilium Operator failed to get ready: %s", err)
+	}
 	ExpectWithOffset(1, err).Should(BeNil(), "Cilium operator was not able to get into ready state")
 }
 
