@@ -39,7 +39,25 @@ ifeq ($(DOCKER_IMAGE_TAG),)
     DOCKER_IMAGE_TAG="latest"
 endif
 
-GOBUILD = -ldflags '$(GOLDFLAGS)' $(EXTRA_GOBUILD_FLAGS)
+# Use vendor directory with go modules
+# A go build is being executed with go modules if:
+# *  The go command is invoked with GO111MODULE=on environment variable set.
+#  * The go command is invoked in a directory outside of the $GOPATH/src tree
+#    and the environment variable GO111MODULE unset (or explicitly set to 'auto').
+ifeq ($(GO111MODULE),on)
+    GOFLAGS = -mod=vendor
+endif
+GOPATH_TEST=$(shell go env | grep GOPATH | sed 's/GOPATH="//' | sed 's/"//g')
+ifneq ($(GOPATH_TEST)/src,$(shell pwd | head -c $(shell expr length "$(GOPATH_TEST)/src")))
+        ifeq ($(GO111MODULE),auto)
+            GOFLAGS = -mod=vendor
+        endif
+        ifeq ($(GO111MODULE),)
+            GOFLAGS = -mod=vendor
+        endif
+endif
+
+GOBUILD = $(GOFLAGS) -ldflags '$(GOLDFLAGS)' $(EXTRA_GOBUILD_FLAGS)
 
 # Uncomment to enable race detection
 #GOBUILD += -race
