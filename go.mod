@@ -1,6 +1,6 @@
 // This is a generated file. Do not edit directly.
 
-module github.com/cilium/cilium
+module github.com/thorfour/cilium
 
 go 1.12
 
